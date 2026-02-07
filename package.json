@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@react-native-community/slider": "^5.1.2",
+    "expo-local-authentication": "^17.0.8"
+  }
+}
