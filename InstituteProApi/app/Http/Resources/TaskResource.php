@@ -18,9 +18,18 @@ class TaskResource extends JsonResource
             'id' => $this->id,
             'task_code' => $this->task_code,
             'title' => $this->title,
+            'description' => $this->description,
             'status' => $this->status,
             'priority' => $this->priority,
+            'category' => $this->category,
             'deadline' => optional($this->deadline)->format('Y-m-d'),
+            'completed_date' => optional($this->completed_date)->format('Y-m-d'),
+            'budget_required' => (float) $this->budget_required,
+            'materials_needed' => $this->materials_needed,
+            'documents_needed' => $this->documents_needed,
+            'is_overdue' => (bool) $this->is_overdue,
+            'created_at' => optional($this->created_at)->toIso8601String(),
+            'updated_at' => optional($this->updated_at)->toIso8601String(),
             'created_by' => $this->whenLoaded('creator', function () {
                 return [
                     'id' => $this->creator->id,

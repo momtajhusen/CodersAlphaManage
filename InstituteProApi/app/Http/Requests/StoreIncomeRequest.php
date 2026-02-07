@@ -14,7 +14,7 @@ class StoreIncomeRequest extends FormRequest
     public function rules()
     {
         return [
-            'employee_id' => 'required|exists:employees,id',
+            'employee_id' => 'nullable|exists:employees,id', // Made nullable for auto-fix
             'income_type' => 'required|in:salary,course_fee,personal_work,other',
             'source_type' => 'required|in:institute,personal_project',
             'contributor_id' => 'nullable|exists:employees,id',

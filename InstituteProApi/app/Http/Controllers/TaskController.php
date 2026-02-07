@@ -167,10 +167,11 @@ class TaskController extends Controller
                 'task'
             );
 
+            // Return resource to match list format
             return response()->json([
                 'success' => true,
                 'message' => 'Task created successfully',
-                'data' => $task
+                'data' => new \App\Http\Resources\TaskResource($task->load('creator'))
             ], 201);
 
         } catch (\Exception $e) {
@@ -254,6 +255,20 @@ class TaskController extends Controller
             }
             $creatorUser = optional($task->creator)->user;
             if ($creatorUser) {
+                // Save to DB
+                try {
+                    \App\Models\Notification::create([
+                        'user_id' => $creatorUser->id,
+                        'title' => 'Task Updated',
+                        'message' => $task->title . ' has been updated',
+                        'type' => 'task',
+                        'reference_type' => 'task',
+                        'reference_id' => $task->id,
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                }
+
                 $creatorUser->notify(new TaskUpdated(
                     'Task Updated',
                     $task->title . ' has been updated',
@@ -269,7 +284,7 @@ class TaskController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Task updated successfully',
-                'data' => $task
+                'data' => new \App\Http\Resources\TaskResource($task->load(['creator', 'assignments.assignee']))
             ]);
 
         } catch (\Exception $e) {
@@ -446,6 +461,20 @@ class TaskController extends Controller
 
             $creatorUser = optional($task->creator)->user;
             if ($creatorUser) {
+                // Save to DB
+                try {
+                    \App\Models\Notification::create([
+                        'user_id' => $creatorUser->id,
+                        'title' => 'Task Progress Updated',
+                        'message' => $task->title . ': ' . $request->progress_percentage . '%',
+                        'type' => 'task',
+                        'reference_type' => 'task',
+                        'reference_id' => $task->id,
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                }
+
                 $creatorUser->notify(new TaskUpdated(
                     'Task Progress Updated',
                     $task->title . ': ' . $request->progress_percentage . '%',
@@ -515,6 +544,20 @@ class TaskController extends Controller
 
             foreach ($task->assignments as $assign) {
                 if ($assign->assignee && $assign->assignee->user) {
+                    // Save to DB
+                    try {
+                        \App\Models\Notification::create([
+                            'user_id' => $assign->assignee->user->id,
+                            'title' => 'Task Completed',
+                            'message' => $task->title . ' has been completed',
+                            'type' => 'task',
+                            'reference_type' => 'task',
+                            'reference_id' => $task->id,
+                        ]);
+                    } catch (\Exception $e) {
+                        \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                    }
+
                     $assign->assignee->user->notify(new TaskUpdated(
                         'Task Completed',
                         $task->title . ' has been completed',
@@ -529,6 +572,20 @@ class TaskController extends Controller
             }
             $creatorUser = optional($task->creator)->user;
             if ($creatorUser) {
+                // Save to DB
+                try {
+                    \App\Models\Notification::create([
+                        'user_id' => $creatorUser->id,
+                        'title' => 'Task Completed',
+                        'message' => $task->title . ' has been completed',
+                        'type' => 'task',
+                        'reference_type' => 'task',
+                        'reference_id' => $task->id,
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                }
+
                 $creatorUser->notify(new TaskUpdated(
                     'Task Completed',
                     $task->title . ' has been completed',

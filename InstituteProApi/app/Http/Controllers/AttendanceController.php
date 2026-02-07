@@ -25,17 +25,16 @@ class AttendanceController extends Controller
         $user = Auth::user();
         if (!$user) return null;
 
-        // Try direct relation (including soft deleted)
-        // We use withTrashed() on the query if possible, or manual lookup
+        // Try direct relation
         // $user->employee uses the relationship which respects soft deletes by default.
         // So we should do manual lookup.
 
-        $employee = \App\Models\Employee::withTrashed()->where('user_id', $user->id)->first();
+        $employee = \App\Models\Employee::where('user_id', $user->id)->first();
         if ($employee) return $employee;
 
         // Try email match
         if ($user->email) {
-            return \App\Models\Employee::withTrashed()->where('email', $user->email)->first();
+            return \App\Models\Employee::where('email', $user->email)->first();
         }
 
         return null;
@@ -111,6 +110,59 @@ class AttendanceController extends Controller
     }
 
     /**
+     * Helper to calculate monthly attendance percentage
+     */
+    private function calculateMonthlyAttendance($employee_id, $date = null)
+    {
+        $targetDate = $date ? Carbon::parse($date) : Carbon::today();
+        $startOfMonth = $targetDate->copy()->startOfMonth();
+        
+        // Count total days passed in month including today
+        $totalDays = $targetDate->day;
+        
+        // Count Present days
+        $presentDays = Attendance::where('employee_id', $employee_id)
+            ->whereBetween('attendance_date', [$startOfMonth->format('Y-m-d'), $targetDate->format('Y-m-d')])
+            ->where('status', 'present')
+            ->count();
+            
+        if ($totalDays > 0) {
+            return round(($presentDays / $totalDays) * 100, 1);
+        }
+        return 0;
+    }
+
+    /**
+     * Helper to get notification details based on status and shift
+     */
+    private function getNotificationDetails($status, $shift_type, $employeeName, $date, $percentage)
+    {
+        $shiftLabel = ucfirst($shift_type); // Day or Night
+        $dateStr = Carbon::parse($date)->format('d M, Y');
+        
+        // Shift Emoji
+        $shiftEmoji = $shift_type === 'day' ? '☀️' : '🌙';
+
+        // Status Emoji
+        if ($status === 'present') {
+            $statusEmoji = '✅ ';
+        } elseif ($status === 'absent') {
+            $statusEmoji = '❌ ';
+        } elseif ($status === 'late') {
+            $statusEmoji = '⚠️ ';
+        } else {
+            $statusEmoji = '📝 ';
+        }
+        
+        $statusLabel = ucfirst($status);
+        
+        $title = "{$shiftEmoji} {$shiftLabel} Attendance: {$statusEmoji}{$statusLabel}";
+        $body = "Hello {$employeeName}, your attendance for {$dateStr} has been marked as {$statusLabel}.\n\n📊 This Month Attendance: {$percentage}%";
+        
+        return ['title' => $title, 'body' => $body];
+    }
+
+    /**
      * Mark check-in
      */
     public function checkIn(Request $request)
@@ -159,6 +211,52 @@ class AttendanceController extends Controller
                         'check_in_time' => Carbon::now()->format('H:i:s'), // Update time if status changes
                         'notes' => $request->notes ?? $existing->notes
                     ]);
+
+                    // Send notification for status update
+                    $targetEmployee = \App\Models\Employee::find($employee_id);
+                    $employeeName = $targetEmployee ? $targetEmployee->full_name : 'Employee';
+                    $targetUser = $targetEmployee ? $targetEmployee->user : null;
+                    if (!$targetUser && $targetEmployee && $targetEmployee->user_id) {
+                         $targetUser = \App\Models\User::find($targetEmployee->user_id);
+                    }
+                    
+                    // Calculate Percentage
+                    $percentage = $this->calculateMonthlyAttendance($employee_id, $today);
+                    $notifDetails = $this->getNotificationDetails($request->status, $shift_type, $employeeName, $today, $percentage);
+
+                    // Create DB Notification for the user
+                    try {
+                        \App\Models\Notification::create([
+                            'user_id' => $targetUser ? $targetUser->id : 1,
+                            'title' => $notifDetails['title'],
+                            'message' => $notifDetails['body'],
+                            'type' => 'attendance',
+                            'reference_type' => 'attendance',
+                            'reference_id' => $existing->id,
+                        ]);
+                    } catch (\Exception $e) {
+                        Log::error('DB Notification Error: ' . $e->getMessage());
+                    }
+
+                    if ($targetUser) {
+                        // Send Expo push to the user
+                        try {
+                            $targetUser->notify(new AttendanceUpdated(
+                                $notifDetails['title'],
+                                $notifDetails['body'],
+                                [
+                                    'type' => 'attendance',
+                                    'attendance_id' => $existing->id,
+                                    'date' => $today->format('Y-m-d'),
+                                    'new_status' => $request->status,
+                                    'shift' => $shift_type,
+                                    'percentage' => $percentage
+                                ]
+                            ));
+                        } catch (\Exception $e) {
+                            Log::error('Attendance Update Notification Failed: ' . $e->getMessage());
+                        }
+                    }
                     
                     return response()->json([
                         'success' => true,
@@ -236,27 +334,43 @@ class AttendanceController extends Controller
                 ['check_in_time' => $check_in_time, 'status' => $status, 'shift' => $shift_type]
             );
 
-            // Send notification to manager
-            /** @var \App\Models\User $user */
-            $user = Auth::user();
-            $employeeName = $user->employee ? $user->employee->full_name : $user->name;
+            // Send notification to user
+            $targetEmployee = \App\Models\Employee::find($employee_id);
+            $employeeName = $targetEmployee ? $targetEmployee->full_name : 'Employee';
+            $targetUser = $targetEmployee ? $targetEmployee->user : null;
+            if (!$targetUser && $targetEmployee && $targetEmployee->user_id) {
+                 $targetUser = \App\Models\User::find($targetEmployee->user_id);
+            }
             
-            $this->sendNotification(
-                'Attendance Check-in',
-                $employeeName . ' checked in at ' . $current_time->format('H:i A'),
-                'attendance'
-            );
+            // Calculate Percentage
+            $percentage = $this->calculateMonthlyAttendance($employee_id, $today);
+            $notifDetails = $this->getNotificationDetails($status, $shift_type, $employeeName, $today, $percentage);
 
-            // Send Expo push to the user (regular check-in notification)
-            if ($user) {
-                $user->notify(new AttendanceUpdated(
-                    'Attendance Check-in',
-                    $employeeName . ' checked in at ' . $current_time->format('H:i A'),
+            // Create DB Notification for the user
+            try {
+                \App\Models\Notification::create([
+                    'user_id' => $targetUser ? $targetUser->id : 1,
+                    'title' => $notifDetails['title'],
+                    'message' => $notifDetails['body'],
+                    'type' => 'attendance',
+                    'reference_type' => 'attendance',
+                    'reference_id' => $attendance->id,
+                ]);
+            } catch (\Exception $e) {
+                Log::error('DB Notification Error: ' . $e->getMessage());
+            }
+
+            if ($targetUser) {
+                // Send Expo push to the user (regular check-in notification)
+                $targetUser->notify(new AttendanceUpdated(
+                    $notifDetails['title'],
+                    $notifDetails['body'],
                     [
-                        'type' => 'attendance_check_in',
+                        'type' => 'attendance',
                         'attendance_id' => $attendance->id,
                         'date' => $today->format('Y-m-d'),
                         'shift' => $shift_type,
+                        'percentage' => $percentage
                     ]
                 ));
             }
@@ -451,7 +565,12 @@ class AttendanceController extends Controller
                                 'remarks' => $attendance->notes
                             ];
                             
-                            Mail::to($email)->send(new LeaveStatusEmail($details));
+                            // Mail::to($email)->send(new LeaveStatusEmail($details));
+                            $this->sendNotification(
+                                'Leave Status Updated',
+                                $employee->full_name . "'s leave " . $attendance->status . " by " . Auth::user()->name,
+                                'attendance'
+                            );
                         }
                     } catch (\Exception $e) {
                         Log::error('Attendance/Leave Status Email Failed: ' . $e->getMessage());
@@ -460,20 +579,41 @@ class AttendanceController extends Controller
                 // For Regular Attendance or Absent: Send Expo Notification
                 else {
                     try {
+                        // Calculate Percentage
+                        $percentage = $this->calculateMonthlyAttendance($employee->id, $attendance->attendance_date);
+                        $notifDetails = $this->getNotificationDetails($request->status, $attendance->shift_type, $employee->full_name, $attendance->attendance_date, $percentage);
+
+                        // Save to DB
+                        try {
+                            \App\Models\Notification::create([
+                                'user_id' => ($employee && $employee->user) ? $employee->user->id : 1,
+                                'title' => $notifDetails['title'],
+                                'message' => $notifDetails['body'],
+                                'type' => 'attendance',
+                                'reference_type' => 'attendance',
+                                'reference_id' => $attendance->id,
+                            ]);
+                        } catch (\Exception $e) {
+                            Log::error('DB Notification Error: ' . $e->getMessage());
+                        }
+
+                        // Send to the user specifically
                         if ($employee && $employee->user) {
                             $employee->user->notify(new AttendanceUpdated(
-                                'Attendance Updated',
-                                'Your attendance for ' . $attendance->attendance_date->format('d M, Y') . ' has been updated to ' . $request->status,
+                                $notifDetails['title'],
+                                $notifDetails['body'],
                                 [
-                                    'type' => 'attendance_update',
+                                    'type' => 'attendance',
                                     'attendance_id' => $attendance->id,
                                     'date' => $attendance->attendance_date->format('Y-m-d'),
                                     'new_status' => $request->status,
+                                    'shift' => $attendance->shift_type,
+                                    'percentage' => $percentage
                                 ]
                             ));
                         }
                     } catch (\Exception $e) {
-                        // Silently fail
+                        Log::error('Attendance Update Notification Failed: ' . $e->getMessage());
                     }
                 }
             }

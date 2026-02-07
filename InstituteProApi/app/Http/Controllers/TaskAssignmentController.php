@@ -227,6 +227,20 @@ class TaskAssignmentController extends Controller
             $task = Task::find($assignment->task_id);
             $creatorUser = optional($task?->creator)->user;
             if ($creatorUser) {
+                // Save to DB
+                try {
+                    \App\Models\Notification::create([
+                        'user_id' => $creatorUser->id,
+                        'title' => 'Assignment Rejected',
+                        'message' => $user->employee->full_name . ' rejected task: ' . ($task?->title ?? ''),
+                        'type' => 'task',
+                        'reference_type' => 'task',
+                        'reference_id' => $assignment->task_id,
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                }
+
                 $creatorUser->notify(new TaskUpdated(
                     'Assignment Rejected',
                     $user->employee->full_name . ' rejected task: ' . ($task?->title ?? ''),

@@ -26,7 +26,8 @@ class FinanceUpdated extends Notification
 
     public function toExpoNotification($notifiable): ExpoMessage
     {
-        $tokens = $notifiable->expoTokens()->pluck('value')->all();
+        // Fetch unique tokens to prevent duplicates for same device/user
+        $tokens = $notifiable->expoTokens()->pluck('value')->unique()->values()->all();
 
         return (new ExpoMessage())
             ->to($tokens)

@@ -17,6 +17,7 @@ use App\Http\Controllers\ActivityLogController;
 use App\Http\Controllers\CashTransferController;
 use App\Http\Controllers\NoticeController;
 use App\Http\Controllers\ExpoTokenController;
+use App\Http\Controllers\HistoryController;
 
 // Public Routes
 Route::post('/auth/send-registration-otp', [AuthController::class, 'sendRegistrationOtp']);
@@ -66,6 +67,7 @@ Route::middleware(['auth:api','compress','metrics'])->group(function () {
     Route::put('/expenses/{id}/reimburse', [ExpenseController::class, 'reimburse']);
     Route::get('/expenses/pending-reimbursement', [ExpenseController::class, 'pendingReimbursements']);
     Route::get('/expenses/report', [ExpenseController::class, 'report']);
+    Route::get('/expenses/categories', [ExpenseController::class, 'popularCategories']);
     Route::apiResource('expenses', ExpenseController::class);
 
     // Cash Transfers
@@ -73,6 +75,9 @@ Route::middleware(['auth:api','compress','metrics'])->group(function () {
     Route::post('/cash-transfers', [CashTransferController::class, 'store']);
     Route::put('/cash-transfers/{id}', [CashTransferController::class, 'update']);
     Route::delete('/cash-transfers/{id}', [CashTransferController::class, 'destroy']);
+    
+    // Finance History
+    Route::get('/finance/history', [HistoryController::class, 'index']);
     
     // Tasks
     Route::apiResource('tasks', TaskController::class);

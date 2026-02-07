@@ -18,6 +18,7 @@ class User extends Authenticatable implements JWTSubject
         'google_id',
         'google_avatar',
         'email_verified_at',
+        'push_token', // Added push_token to fillable
     ];
 
     protected $hidden = [

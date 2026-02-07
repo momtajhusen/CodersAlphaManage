@@ -4,11 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Employee extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory;
 
     protected $fillable = [
         'user_id',
@@ -107,7 +106,7 @@ class Employee extends Model
             ->orderBy('id', 'desc')
             ->first();
 
-        return $lastLedger->new_balance ?? 0;
+        return $lastLedger ? $lastLedger->new_balance : 0;
     }
 
     public function getTotalSalaryThisMonth()

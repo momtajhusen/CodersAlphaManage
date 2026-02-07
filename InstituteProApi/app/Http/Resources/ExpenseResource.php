@@ -25,9 +25,12 @@ class ExpenseResource extends JsonResource
             'category' => $this->category,
             'amount' => (float) $this->amount,
             'status' => $this->status,
-            'date' => optional($this->expense_date)->format('Y-m-d'),
+            'expense_type' => $this->expense_type,
+            'expense_date' => optional($this->expense_date)->format('Y-m-d'),
+            'date' => optional($this->expense_date)->format('Y-m-d'), // Keep for backward compatibility
             'paid_from' => $this->paid_from,
             'bill_photo_path' => $this->bill_photo_path,
+            'created_at' => $this->created_at ? $this->created_at->toIso8601String() : null,
         ];
     }
 }

@@ -50,7 +50,8 @@ class ExpenseController extends Controller
                 ]);
             }
 
-            $query->orderBy('expense_date', 'desc');
+            $query->orderBy('expense_date', 'desc')
+                  ->orderBy('created_at', 'desc');
 
             $per_page = min((int) ($request->per_page ?? 20), 50);
             $expenses = $query->paginate($per_page);
@@ -69,6 +70,31 @@ class ExpenseController extends Controller
     }
 
     /**
+     * Get popular categories
+     */
+    public function popularCategories()
+    {
+        try {
+            // Get top 20 most used categories
+            $categories = Expense::select('category', DB::raw('count(*) as total'))
+                ->groupBy('category')
+                ->orderBy('total', 'desc')
+                ->limit(20)
+                ->pluck('category');
+
+            return response()->json([
+                'success' => true,
+                'data' => $categories
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Create expense record
      */
     public function store(\App\Http\Requests\StoreExpenseRequest $request)
@@ -78,6 +104,29 @@ class ExpenseController extends Controller
 
             /** @var \App\Models\User $user */
             $user = Auth::user();
+            
+            // Ensure User has an Employee record (Auto-fix if missing)
+            if (!$user->employee) {
+                // Check if employee with same email exists
+                $existingEmployee = \App\Models\Employee::where('email', $user->email)->first();
+
+                if ($existingEmployee) {
+                    // Link existing employee to this user
+                    $existingEmployee->update(['user_id' => $user->id]);
+                } else {
+                    $employee = \App\Models\Employee::create([
+                        'user_id' => $user->id,
+                        'full_name' => $user->name,
+                        'email' => $user->email,
+                        'employee_code' => 'EMP-' . strtoupper(uniqid()),
+                        'role' => 'Staff',
+                        'status' => 'active',
+                        'join_date' => now(),
+                        'monthly_salary' => 0,
+                    ]);
+                }
+                $user->load('employee');
+            }
             
             if (!$user->employee) {
                 throw new \Exception('Current user is not linked to an employee record.');
@@ -140,27 +189,68 @@ class ExpenseController extends Controller
 
             DB::commit();
 
-            // Send notification
-            $this->sendNotification(
-                'Expense Added',
-                'Rs.' . $request->amount . ' ' . $request->category . ' expense added',
-                'expense'
-            );
+            // Send notification removed to avoid duplicates (was broadcasting to everyone)
+            // We now rely on targeted notifications below.
 
-            $employeeUser = $expense->employee?->user;
-            if ($employeeUser) {
-                $employeeUser->notify(new FinanceUpdated(
-                    'Expense Added',
-                    'Rs.' . $expense->amount . ' ' . $expense->category . ' expense added',
-                    [
-                        'type' => 'expense_created',
-                        'expense_id' => $expense->id,
-                        'amount' => (float) $expense->amount,
-                        'category' => $expense->category,
-                        'date' => $expense->expense_date?->format('Y-m-d'),
-                        'paid_from' => $expense->paid_from,
-                    ]
-                ));
+            try {
+                $employeeUser = $expense->employee?->user;
+                if ($employeeUser) {
+                    
+                    // Calculate Totals for Notification
+                    $queryBase = Expense::where('expense_type', $expense->expense_type)
+                        ->where('status', '!=', 'rejected');
+                    
+                    // If personal, scope to employee
+                    if ($expense->expense_type === 'personal') {
+                        $queryBase->where('employee_id', $expense->employee_id);
+                    }
+
+                    $grandTotal = $queryBase->sum('amount');
+                    
+                    $expenseDate = \Carbon\Carbon::parse($expense->expense_date);
+                    $monthTotal = (clone $queryBase)
+                        ->whereYear('expense_date', $expenseDate->year)
+                        ->whereMonth('expense_date', $expenseDate->month)
+                        ->sum('amount');
+
+                    $typeLabel = ($expense->expense_type === 'institute' ? 'Office' : ucfirst($expense->expense_type)) . ' Amount';
+                    $employeeName = $expense->employee?->full_name ?? 'N/A';
+                    
+                    $title = "💸 Expense Added: Rs. {$expense->amount}";
+                    $message = "👤 Name: {$employeeName}\n" .
+                               "📂 Category: {$expense->category} ({$typeLabel})\n" .
+                               "--------------------------------\n" .
+                               "📅 This Month: Rs. {$monthTotal}";
+
+                    // Save to DB
+                    try {
+                        \App\Models\Notification::create([
+                            'user_id' => $employeeUser->id,
+                            'title' => $title,
+                            'message' => $message,
+                            'type' => 'expense',
+                            'reference_type' => 'expense',
+                            'reference_id' => $expense->id,
+                        ]);
+                    } catch (\Exception $e) {
+                        \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                    }
+
+                    $employeeUser->notify(new FinanceUpdated(
+                        $title,
+                        $message,
+                        [
+                            'type' => 'expense_created',
+                            'expense_id' => $expense->id,
+                            'amount' => (float) $expense->amount,
+                            'category' => $expense->category,
+                            'date' => $expense->expense_date?->format('Y-m-d'),
+                            'paid_from' => $expense->paid_from,
+                        ]
+                    ));
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Expense Notification Error: ' . $e->getMessage());
             }
 
             return response()->json([
@@ -252,6 +342,64 @@ class ExpenseController extends Controller
                 $expense->toArray()
             );
 
+            // Send Notification
+            try {
+                $employeeUser = $expense->employee?->user;
+                if ($employeeUser) {
+                    
+                    // Calculate Totals for Notification
+                    $queryBase = Expense::where('expense_type', $expense->expense_type)
+                        ->where('status', '!=', 'rejected');
+                    
+                    // If personal, scope to employee
+                    if ($expense->expense_type === 'personal') {
+                        $queryBase->where('employee_id', $expense->employee_id);
+                    }
+
+                    $grandTotal = $queryBase->sum('amount');
+                    
+                    $expenseDate = \Carbon\Carbon::parse($expense->expense_date);
+                    $monthTotal = (clone $queryBase)
+                        ->whereYear('expense_date', $expenseDate->year)
+                        ->whereMonth('expense_date', $expenseDate->month)
+                        ->sum('amount');
+
+                    $typeLabel = ($expense->expense_type === 'institute' ? 'Office' : ucfirst($expense->expense_type)) . ' Amount';
+                    $employeeName = $expense->employee?->full_name ?? 'N/A';
+                    
+                    $title = "✏️ Expense Updated: Rs. {$expense->amount}";
+                    $message = "👤 Name: {$employeeName}\n" .
+                               "📂 Category: {$expense->category} ({$typeLabel})\n" .
+                               "--------------------------------\n" .
+                               "📅 This Month: Rs. {$monthTotal}";
+
+                    // Save to DB
+                    \App\Models\Notification::create([
+                        'user_id' => $employeeUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'expense',
+                        'reference_type' => 'expense',
+                        'reference_id' => $expense->id,
+                    ]);
+
+                    $employeeUser->notify(new FinanceUpdated(
+                        $title,
+                        $message,
+                        [
+                            'type' => 'expense_updated',
+                            'expense_id' => $expense->id,
+                            'amount' => (float) $expense->amount,
+                            'category' => $expense->category,
+                            'date' => $expense->expense_date?->format('Y-m-d'),
+                            'paid_from' => $expense->paid_from,
+                        ]
+                    ));
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Expense Update Notification Error: ' . $e->getMessage());
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Expense updated successfully',
@@ -302,6 +450,42 @@ class ExpenseController extends Controller
             );
 
             DB::commit();
+
+            // Send Notification
+            try {
+                $employeeUser = $expense->employee?->user;
+                if ($employeeUser) {
+                    $typeLabel = ($expense->expense_type === 'institute' ? 'Office' : ucfirst($expense->expense_type)) . ' Amount';
+                    $employeeName = $expense->employee?->full_name ?? 'N/A';
+                    
+                    $title = "🗑️ Expense Deleted: Rs. {$expense->amount}";
+                    $message = "👤 Name: {$employeeName}\n" .
+                               "📂 Category: {$expense->category} ({$typeLabel})";
+
+                    // Save to DB
+                    \App\Models\Notification::create([
+                        'user_id' => $employeeUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'expense',
+                        'reference_type' => 'expense',
+                        'reference_id' => $id, // Use ID even if deleted
+                    ]);
+
+                    $employeeUser->notify(new FinanceUpdated(
+                        $title,
+                        $message,
+                        [
+                            'type' => 'expense_deleted',
+                            'amount' => (float) $expense->amount,
+                            'category' => $expense->category,
+                            'date' => $expense->expense_date?->format('Y-m-d'),
+                        ]
+                    ));
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Expense Delete Notification Error: ' . $e->getMessage());
+            }
 
             return response()->json([
                 'success' => true,
@@ -397,7 +581,7 @@ class ExpenseController extends Controller
                         'status' => 'approved',
                         'remarks' => $expense->notes
                     ];
-                    Mail::to($employee->email)->send(new ExpenseStatusEmail($details));
+                    // Mail::to($employee->email)->send(new ExpenseStatusEmail($details));
                 }
             } catch (\Exception $e) {
                 Log::error('Expense Approval Email Failed: ' . $e->getMessage());
@@ -456,7 +640,12 @@ class ExpenseController extends Controller
                         'status' => 'rejected',
                         'remarks' => $request->reason ?? 'Rejected by manager'
                     ];
-                    Mail::to($employee->email)->send(new ExpenseStatusEmail($details));
+                    // Mail::to($employee->email)->send(new ExpenseStatusEmail($details));
+                    $this->sendNotification(
+                        'Expense Rejected',
+                        'Rs.' . $expense->amount . ' expense rejected. Reason: ' . ($request->reason ?? 'N/A'),
+                        'expense'
+                    );
                 }
             } catch (\Exception $e) {
                 Log::error('Expense Rejection Email Failed: ' . $e->getMessage());

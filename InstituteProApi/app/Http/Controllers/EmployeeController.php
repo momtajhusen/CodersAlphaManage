@@ -211,7 +211,7 @@ class EmployeeController extends Controller
     }
 
     /**
-     * Soft delete employee
+     * Permanently delete employee and all related data
      */
     public function destroy(Request $request, $id)
     {
@@ -220,42 +220,42 @@ class EmployeeController extends Controller
 
             $employee = Employee::findOrFail($id);
             
-            // Delete all associated data if requested
-            if ($request->boolean('delete_all_data')) {
-                \App\Models\Attendance::where('employee_id', $employee->id)->delete();
-                \App\Models\Expense::where('employee_id', $employee->id)->delete();
-                \App\Models\Income::where('employee_id', $employee->id)->delete();
-                \App\Models\TaskAssignment::where('employee_id', $employee->id)->delete();
-                \App\Models\SelfLoggedWork::where('employee_id', $employee->id)->delete();
-                \App\Models\FloatLedger::where('employee_id', $employee->id)->delete();
-            }
+            // Delete all associated data permanently
+            \App\Models\Attendance::where('employee_id', $employee->id)->delete();
+            
+            // Use forceDelete for models with SoftDeletes trait
+            \App\Models\Expense::where('employee_id', $employee->id)->forceDelete();
+            \App\Models\Income::where('employee_id', $employee->id)->forceDelete();
+            
+            \App\Models\TaskAssignment::where('assigned_to', $employee->id)->delete();
+            \App\Models\SelfLoggedWork::where('employee_id', $employee->id)->delete();
+            \App\Models\FloatLedger::where('employee_id', $employee->id)->delete();
+            \App\Models\ActivityLog::where('actor_id', $employee->id)->delete();
+            \App\Models\ActivityLog::where('entity_type', 'employee')->where('entity_id', $employee->id)->delete();
 
-            // Handle associated User to free up email
+            // Handle associated User
             if ($employee->user) {
                 $user = $employee->user;
                 
-                // Detach user from employee to prevent cascade delete of employee
-                // This ensures employee record remains (soft deleted) for history
+                // Detach user from employee
                 $employee->user_id = null;
                 $employee->save();
                 
-                // Delete the user (frees up email for re-registration)
+                // Delete notifications for this user
+                \App\Models\Notification::where('user_id', $user->id)->delete();
+
+                // Delete the user permanently
                 $user->delete();
             }
             
+            // Delete employee permanently (SoftDeletes trait removed from model)
             $employee->delete();
-
-            // Log activity
-            $this->logActivity('delete', 'employee', $id, 
-                $employee->toArray(), 
-                null
-            );
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Employee deleted successfully'
+                'message' => 'Employee and all related data deleted permanently'
             ]);
 
         } catch (\Exception $e) {

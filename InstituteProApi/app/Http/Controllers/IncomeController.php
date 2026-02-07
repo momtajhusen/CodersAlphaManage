@@ -51,7 +51,8 @@ class IncomeController extends Controller
                 ]);
             }
 
-            $query->orderBy('income_date', 'desc');
+            $query->orderBy('income_date', 'desc')
+                  ->orderBy('created_at', 'desc');
 
             $per_page = min((int) ($request->per_page ?? 20), 50);
             $income = $query->paginate($per_page);
@@ -78,9 +79,36 @@ class IncomeController extends Controller
         try {
             /** @var \App\Models\User $user */
             $user = Auth::user();
+            
+            // Ensure User has an Employee record
+            $employee = $user->employee;
+            if (!$employee) {
+                // Check if employee with same email exists
+                $existingEmployee = \App\Models\Employee::where('email', $user->email)->first();
+
+                if ($existingEmployee) {
+                    // Link existing employee to this user
+                    $existingEmployee->update(['user_id' => $user->id]);
+                    $employee = $existingEmployee;
+                } else {
+                    // Auto-create employee profile for the user
+                    $employee = \App\Models\Employee::create([
+                        'user_id' => $user->id,
+                        'full_name' => $user->name,
+                        'email' => $user->email,
+                        'employee_code' => 'EMP-' . strtoupper(uniqid()),
+                        'role' => 'Staff', // Default role
+                        'status' => 'active',
+                        'join_date' => now(),
+                        'monthly_salary' => 0,
+                    ]);
+                }
+                // Reload relationship
+                $user->load('employee');
+            }
 
             $income = Income::create([
-                'employee_id' => $request->employee_id,
+                'employee_id' => $request->employee_id ?? $employee->id, // Use request ID or current user's employee ID
                 'income_type' => $request->income_type,
                 'source_type' => $request->source_type,
                 'contributor_id' => $request->contributor_id,
@@ -91,8 +119,8 @@ class IncomeController extends Controller
                 'description' => $request->description,
                 'income_date' => $request->income_date,
                 'status' => 'confirmed',
-                'created_by' => $user->employee->id,
-                'confirmed_by' => $user->employee->id,
+                'created_by' => $employee->id,
+                'confirmed_by' => $employee->id,
             ]);
 
             // Handle file upload
@@ -129,8 +157,25 @@ class IncomeController extends Controller
 
             DB::commit();
 
+            // Broadcast Notification removed to avoid duplicates. 
+            // We now rely on targeted notifications below.
+
             $heldByUser = $income->heldBy?->user;
             if ($heldByUser) {
+                // Save to DB
+                try {
+                    \App\Models\Notification::create([
+                        'user_id' => $heldByUser->id,
+                        'title' => 'Income Confirmed',
+                        'message' => 'Rs.' . $income->amount . ' added to your float',
+                        'type' => 'income',
+                        'reference_type' => 'income',
+                        'reference_id' => $income->id,
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                }
+
                 $heldByUser->notify(new FinanceUpdated(
                     'Income Confirmed',
                     'Rs.' . $income->amount . ' added to your float',
@@ -146,10 +191,53 @@ class IncomeController extends Controller
             }
 
             $ownerUser = $income->employee?->user;
-            if ($ownerUser) {
+            // Only send if owner is different from heldByUser to avoid double notification for same person
+            if ($ownerUser && (!$heldByUser || $ownerUser->id !== $heldByUser->id)) {
+                
+                // Calculate Totals for Notification
+                $queryBase = Income::where('income_type', $income->income_type)
+                    ->where('status', '!=', 'rejected');
+                
+                // If personal, scope to employee
+                if ($income->income_type === 'personal') {
+                    $queryBase->where('employee_id', $income->employee_id);
+                }
+
+                $grandTotal = $queryBase->sum('amount');
+                
+                $incomeDate = \Carbon\Carbon::parse($income->income_date);
+                $monthTotal = (clone $queryBase)
+                    ->whereYear('income_date', $incomeDate->year)
+                    ->whereMonth('income_date', $incomeDate->month)
+                    ->sum('amount');
+
+                $typeLabel = ($income->income_type === 'institute' ? 'Office' : ucfirst($income->income_type)) . ' Amount';
+                $categoryLabel = $income->category ?? $income->getTypeLabel();
+                $employeeName = $income->employee?->full_name ?? 'N/A';
+                
+                $title = "📈 Income Added: Rs. {$income->amount}";
+                $message = "👤 Name: {$employeeName}\n" .
+                           "📂 Category: {$categoryLabel} ({$typeLabel})\n" .
+                           "--------------------------------\n" .
+                           "📅 This Month: Rs. {$monthTotal}";
+
+                // Save to DB
+                try {
+                    \App\Models\Notification::create([
+                        'user_id' => $ownerUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'income',
+                        'reference_type' => 'income',
+                        'reference_id' => $income->id,
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::error('DB Notification Error: ' . $e->getMessage());
+                }
+
                 $ownerUser->notify(new FinanceUpdated(
-                    'Income Recorded',
-                    'Rs.' . $income->amount . ' ' . ($income->category ?? $income->getTypeLabel()) . ' recorded',
+                    $title,
+                    $message,
                     [
                         'type' => 'income_recorded',
                         'income_id' => $income->id,
@@ -271,6 +359,64 @@ class IncomeController extends Controller
 
             DB::commit();
 
+            // Send Notification
+            try {
+                $ownerUser = $income->employee?->user;
+                if ($ownerUser) {
+                    
+                    // Calculate Totals for Notification
+                    $queryBase = Income::where('income_type', $income->income_type)
+                        ->where('status', '!=', 'rejected');
+                    
+                    // If personal, scope to employee
+                    if ($income->income_type === 'personal') {
+                        $queryBase->where('employee_id', $income->employee_id);
+                    }
+
+                    $grandTotal = $queryBase->sum('amount');
+                    
+                    $incomeDate = \Carbon\Carbon::parse($income->income_date);
+                    $monthTotal = (clone $queryBase)
+                        ->whereYear('income_date', $incomeDate->year)
+                        ->whereMonth('income_date', $incomeDate->month)
+                        ->sum('amount');
+
+                    $typeLabel = ($income->income_type === 'institute' ? 'Office' : ucfirst($income->income_type)) . ' Amount';
+                    $categoryLabel = $income->category ?? $income->getTypeLabel();
+                    $employeeName = $income->employee?->full_name ?? 'N/A';
+                    
+                    $title = "✏️ Income Updated: Rs. {$income->amount}";
+                    $message = "👤 Name: {$employeeName}\n" .
+                               "📂 Category: {$categoryLabel} ({$typeLabel})\n" .
+                               "--------------------------------\n" .
+                               "📅 This Month: Rs. {$monthTotal}";
+
+                    // Save to DB
+                    \App\Models\Notification::create([
+                        'user_id' => $ownerUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'income',
+                        'reference_type' => 'income',
+                        'reference_id' => $income->id,
+                    ]);
+
+                    $ownerUser->notify(new FinanceUpdated(
+                        $title,
+                        $message,
+                        [
+                            'type' => 'income_updated',
+                            'income_id' => $income->id,
+                            'amount' => (float) $income->amount,
+                            'category' => $income->category,
+                            'date' => $income->income_date?->format('Y-m-d'),
+                        ]
+                    ));
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Income Update Notification Error: ' . $e->getMessage());
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Income updated successfully',
@@ -329,6 +475,43 @@ class IncomeController extends Controller
 
             DB::commit();
 
+            // Send Notification
+            try {
+                $ownerUser = $income->employee?->user;
+                if ($ownerUser) {
+                    $typeLabel = ($income->income_type === 'institute' ? 'Office' : ucfirst($income->income_type)) . ' Amount';
+                    $categoryLabel = $income->category ?? $income->getTypeLabel();
+                    $employeeName = $income->employee?->full_name ?? 'N/A';
+                    
+                    $title = "🗑️ Income Deleted: Rs. {$income->amount}";
+                    $message = "👤 Name: {$employeeName}\n" .
+                               "📂 Category: {$categoryLabel} ({$typeLabel})";
+
+                    // Save to DB
+                    \App\Models\Notification::create([
+                        'user_id' => $ownerUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'income',
+                        'reference_type' => 'income',
+                        'reference_id' => $id, // Use ID even if deleted, or null
+                    ]);
+
+                    $ownerUser->notify(new FinanceUpdated(
+                        $title,
+                        $message,
+                        [
+                            'type' => 'income_deleted',
+                            'amount' => (float) $income->amount,
+                            'category' => $income->category,
+                            'date' => $income->income_date?->format('Y-m-d'),
+                        ]
+                    ));
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Income Delete Notification Error: ' . $e->getMessage());
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Income record deleted successfully'
@@ -364,6 +547,20 @@ class IncomeController extends Controller
         try {
             /** @var \App\Models\User $user */
             $user = Auth::user();
+            
+            // Ensure User has an Employee record (Auto-fix if missing)
+            if (!$user->employee) {
+                $employee = \App\Models\Employee::create([
+                    'user_id' => $user->id,
+                    'full_name' => $user->name,
+                    'email' => $user->email,
+                    'employee_code' => 'EMP-' . strtoupper(uniqid()),
+                    'role' => 'Staff',
+                    'status' => 'active',
+                ]);
+                $user->load('employee');
+            }
+
             $income = Income::findOrFail($id);
 
             $old_values = $income->toArray();
@@ -380,11 +577,11 @@ class IncomeController extends Controller
             );
 
             // Send notification
-            $this->sendNotification(
-                'Income Confirmed',
-                'Rs.' . $income->amount . ' income confirmed',
-                'income'
-            );
+            // $this->sendNotification(
+            //     'Income Confirmed',
+            //     'Rs.' . $income->amount . ' income confirmed',
+            //     'income'
+            // );
 
             return response()->json([
                 'success' => true,

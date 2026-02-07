@@ -21,7 +21,8 @@ class IncomeResource extends JsonResource
             'income_type' => $this->income_type,
             'source_type' => $this->source_type,
             'status' => $this->status,
-            'date' => optional($this->income_date)->format('Y-m-d'),
+            'income_date' => optional($this->income_date)->format('Y-m-d'),
+            'date' => optional($this->income_date)->format('Y-m-d'), // Keep for backward compatibility if needed
             'held_by' => $this->whenLoaded('heldBy', function () {
                 return [
                     'id' => $this->heldBy->id,
@@ -34,6 +35,7 @@ class IncomeResource extends JsonResource
                     'name' => $this->contributor->full_name,
                 ];
             }),
+            'created_at' => $this->created_at ? $this->created_at->toIso8601String() : null,
         ];
     }
 }

@@ -87,24 +87,44 @@ class AuthController extends Controller
         try {
             // Create user
             $user = User::create([
+                'name' => $request->full_name,
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'email_verified_at' => now(), // Auto verify since OTP is correct
             ]);
 
-            // Create employee record
-            $employee = Employee::create([
-                'user_id' => $user->id,
-                'employee_code' => 'EMP-' . strtoupper(uniqid()),
-                'full_name' => $request->full_name,
-                'email' => $request->email,
-                'mobile_number' => $request->mobile_number,
-                'role' => $request->role,
-                'monthly_salary' => $request->monthly_salary,
-                'salary_type' => $request->salary_type ?? 'fixed',
-                'join_date' => now(),
-                'status' => 'active',
-            ]);
+            // Check if employee exists
+            $employee = Employee::where('email', $request->email)->first();
+
+            if ($employee) {
+                // Link existing employee
+                $employee->update([
+                    'user_id' => $user->id,
+                    'full_name' => $request->full_name, // Update name if needed
+                    'mobile_number' => $request->mobile_number,
+                    'role' => $request->role, // Update role?? Maybe careful here. But for registration, usually we trust input or existing?
+                    // Let's assume registration updates the profile or keeps existing important data.
+                    // For now, I will update basic info but maybe keep salary/join_date if set?
+                    // Actually, if it's a new registration, we might want to respect the input.
+                    // But if employee exists, it might have valid data.
+                    // Safest is to link and update only missing or user-provided fields.
+                    'monthly_salary' => $request->monthly_salary ?? $employee->monthly_salary,
+                ]);
+            } else {
+                // Create employee record
+                $employee = Employee::create([
+                    'user_id' => $user->id,
+                    'employee_code' => 'EMP-' . strtoupper(uniqid()),
+                    'full_name' => $request->full_name,
+                    'email' => $request->email,
+                    'mobile_number' => $request->mobile_number,
+                    'role' => $request->role,
+                    'monthly_salary' => $request->monthly_salary,
+                    'salary_type' => $request->salary_type ?? 'fixed',
+                    'join_date' => now(),
+                    'status' => 'active',
+                ]);
+            }
 
             // Log activity
             $this->logActivity('create', 'employee', $employee->id, 
@@ -303,6 +323,29 @@ class AuthController extends Controller
 
             /** @var \App\Models\User $user */
             $user = $guard->user();
+            
+            // Auto-link employee if not linked but email matches
+            if (!$user->employee) {
+                $matchingEmployee = Employee::where('email', $user->email)->first();
+                if ($matchingEmployee) {
+                    $matchingEmployee->update(['user_id' => $user->id]);
+                    $user->load('employee'); // Reload relation
+                } else {
+                    // Auto-create employee profile for the user
+                    $employee = Employee::create([
+                        'user_id' => $user->id,
+                        'full_name' => $user->name,
+                        'email' => $user->email,
+                        'employee_code' => 'EMP-' . strtoupper(uniqid()),
+                        'role' => 'Staff', // Default role
+                        'status' => 'active',
+                        'join_date' => now(),
+                        'monthly_salary' => 0,
+                    ]);
+                    $user->load('employee');
+                }
+            }
+            
             $employee = $user->employee;
 
             // Log login activity
@@ -358,17 +401,23 @@ class AuthController extends Controller
 
             // Create employee if not exists
             if (!$user->employee) {
-                Employee::create([
-                    'user_id' => $user->id,
-                    'employee_code' => 'EMP-' . strtoupper(uniqid()),
-                    'full_name' => $request->full_name,
-                    'email' => $request->email,
-                    'mobile_number' => $request->mobile_number ?? '',
-                    'role' => $request->role ?? 'employee',
-                    'monthly_salary' => 0,
-                    'join_date' => now(),
-                    'status' => 'active',
-                ]);
+                $existingEmployee = Employee::where('email', $request->email)->first();
+                
+                if ($existingEmployee) {
+                    $existingEmployee->update(['user_id' => $user->id]);
+                } else {
+                    Employee::create([
+                        'user_id' => $user->id,
+                        'employee_code' => 'EMP-' . strtoupper(uniqid()),
+                        'full_name' => $request->full_name,
+                        'email' => $request->email,
+                        'mobile_number' => $request->mobile_number ?? '',
+                        'role' => $request->role ?? 'employee',
+                        'monthly_salary' => 0,
+                        'join_date' => now(),
+                        'status' => 'active',
+                    ]);
+                }
             }
 
             $token = JWTAuth::fromUser($user);
@@ -426,6 +475,7 @@ class AuthController extends Controller
         try {
             // Update User
             $user->update([
+                'name' => $request->full_name,
                 'email' => $request->email,
             ]);
 
@@ -531,6 +581,28 @@ class AuthController extends Controller
                     'success' => false,
                     'message' => 'User not authenticated'
                 ], 401);
+            }
+
+            // Auto-link employee if not linked but email matches
+            if (!$user->employee) {
+                $matchingEmployee = Employee::where('email', $user->email)->first();
+                if ($matchingEmployee) {
+                    $matchingEmployee->update(['user_id' => $user->id]);
+                    $user->load('employee'); // Reload relation
+                } else {
+                    // Auto-create employee profile for the user
+                    $employee = Employee::create([
+                        'user_id' => $user->id,
+                        'full_name' => $user->name,
+                        'email' => $user->email,
+                        'employee_code' => 'EMP-' . strtoupper(uniqid()),
+                        'role' => 'Staff', // Default role
+                        'status' => 'active',
+                        'join_date' => now(),
+                        'monthly_salary' => 0,
+                    ]);
+                    $user->load('employee');
+                }
             }
 
             return response()->json([

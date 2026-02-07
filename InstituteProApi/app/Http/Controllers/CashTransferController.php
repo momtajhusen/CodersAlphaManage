@@ -72,7 +72,10 @@ class CashTransferController extends Controller
             $sender = $user->employee;
 
             if (!$sender) {
-                throw new \Exception('User is not linked to an employee record.');
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User is not linked to an employee record.'
+                ], 400);
             }
             
             // Check sender balance
@@ -131,34 +134,73 @@ class CashTransferController extends Controller
 
             DB::commit();
 
-            $receiverUser = $receiver->user;
-            if ($receiverUser) {
-                $receiverUser->notify(new FinanceUpdated(
-                    'Cash Received',
-                    'Rs.' . $request->amount . ' received from ' . $sender->full_name,
-                    [
-                        'type' => 'cash_transfer_received',
-                        'transfer_id' => $transfer->id,
-                        'amount' => (float) $request->amount,
-                        'date' => $request->transfer_date,
-                        'from' => $sender->full_name,
-                    ]
-                ));
-            }
+            try {
+                // Notify Receiver
+                $receiverUser = $receiver->user;
+                if ($receiverUser) {
+                    $title = "📥 Cash Received: Rs. " . number_format($request->amount, 2);
+                    $message = "👤 From: " . $sender->full_name . "\n" .
+                               "--------------------------------\n" .
+                               "💰 My Balance: Rs. " . number_format($receiverNewBalance, 2) . "\n" .
+                               "💰 Sender Balance: Rs. " . number_format($senderNewBalance, 2);
 
-            $senderUser = $sender->user;
-            if ($senderUser) {
-                $senderUser->notify(new FinanceUpdated(
-                    'Cash Sent',
-                    'Rs.' . $request->amount . ' sent to ' . $receiver->full_name,
-                    [
-                        'type' => 'cash_transfer_sent',
-                        'transfer_id' => $transfer->id,
-                        'amount' => (float) $request->amount,
-                        'date' => $request->transfer_date,
-                        'to' => $receiver->full_name,
-                    ]
-                ));
+                    // Save to DB
+                    \App\Models\Notification::create([
+                        'user_id' => $receiverUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'transfer',
+                        'reference_type' => CashTransfer::class,
+                        'reference_id' => $transfer->id,
+                    ]);
+
+                    $receiverUser->notify(new FinanceUpdated(
+                        $title,
+                        $message,
+                        [
+                            'type' => 'cash_transfer_received',
+                            'transfer_id' => $transfer->id,
+                            'amount' => (float) $request->amount,
+                            'date' => $request->transfer_date,
+                            'from' => $sender->full_name,
+                        ]
+                    ));
+                }
+
+                // Notify Sender
+                $senderUser = $sender->user;
+                if ($senderUser) {
+                    $title = "📤 Cash Sent: Rs. " . number_format($request->amount, 2);
+                    $message = "👤 To: " . $receiver->full_name . "\n" .
+                               "--------------------------------\n" .
+                               "💰 My Balance: Rs. " . number_format($senderNewBalance, 2) . "\n" .
+                               "💰 Receiver Balance: Rs. " . number_format($receiverNewBalance, 2);
+
+                    // Save to DB
+                    \App\Models\Notification::create([
+                        'user_id' => $senderUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'transfer',
+                        'reference_type' => CashTransfer::class,
+                        'reference_id' => $transfer->id,
+                    ]);
+
+                    $senderUser->notify(new FinanceUpdated(
+                        $title,
+                        $message,
+                        [
+                            'type' => 'cash_transfer_sent',
+                            'transfer_id' => $transfer->id,
+                            'amount' => (float) $request->amount,
+                            'date' => $request->transfer_date,
+                            'to' => $receiver->full_name,
+                        ]
+                    ));
+                }
+            } catch (\Exception $e) {
+                // Log notification failure but do not fail the request
+                \Illuminate\Support\Facades\Log::error('Notification failed: ' . $e->getMessage());
             }
 
             return response()->json([
@@ -242,6 +284,69 @@ class CashTransferController extends Controller
 
             DB::commit();
 
+            // Send Notification for Update
+            try {
+                $transfer->refresh(); // Reload to get latest data
+                $updatedSender = $transfer->sender;
+                $updatedReceiver = $transfer->receiver;
+                
+                // Get fresh balances
+                $senderBalance = $updatedSender->getCurrentFloatBalance();
+                $receiverBalance = $updatedReceiver->getCurrentFloatBalance();
+
+                // Notify Receiver
+                $receiverUser = $updatedReceiver->user;
+                if ($receiverUser) {
+                    $title = "🔄 Transfer Updated: Rs. " . number_format($transfer->amount, 2);
+                    $message = "👤 From: " . $updatedSender->full_name . "\n" .
+                               "--------------------------------\n" .
+                               "💰 My Balance: Rs. " . number_format($receiverBalance, 2) . "\n" .
+                               "💰 Sender Balance: Rs. " . number_format($senderBalance, 2);
+
+                    \App\Models\Notification::create([
+                        'user_id' => $receiverUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'transfer',
+                        'reference_type' => CashTransfer::class,
+                        'reference_id' => $transfer->id,
+                    ]);
+                    
+                    $receiverUser->notify(new FinanceUpdated($title, $message, [
+                        'type' => 'cash_transfer_updated',
+                        'transfer_id' => $transfer->id,
+                        'amount' => (float) $transfer->amount
+                    ]));
+                }
+
+                // Notify Sender
+                $senderUser = $updatedSender->user;
+                if ($senderUser) {
+                    $title = "🔄 Transfer Updated: Rs. " . number_format($transfer->amount, 2);
+                    $message = "👤 To: " . $updatedReceiver->full_name . "\n" .
+                               "--------------------------------\n" .
+                               "💰 My Balance: Rs. " . number_format($senderBalance, 2) . "\n" .
+                               "💰 Receiver Balance: Rs. " . number_format($receiverBalance, 2);
+
+                    \App\Models\Notification::create([
+                        'user_id' => $senderUser->id,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'transfer',
+                        'reference_type' => CashTransfer::class,
+                        'reference_id' => $transfer->id,
+                    ]);
+
+                    $senderUser->notify(new FinanceUpdated($title, $message, [
+                        'type' => 'cash_transfer_updated',
+                        'transfer_id' => $transfer->id,
+                        'amount' => (float) $transfer->amount
+                    ]));
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Update Notification failed: ' . $e->getMessage());
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Transfer updated successfully',
@@ -279,6 +384,61 @@ class CashTransferController extends Controller
             $transfer->delete();
 
             DB::commit();
+
+            // Send Notification for Delete
+            try {
+                $sender = Employee::find($transfer->sender_id);
+                $receiver = Employee::find($transfer->receiver_id);
+                
+                if ($sender && $receiver) {
+                    $senderBalance = $sender->getCurrentFloatBalance();
+                    $receiverBalance = $receiver->getCurrentFloatBalance();
+
+                    // Notify Receiver (Funds Reversed/Deducted)
+                    $receiverUser = $receiver->user;
+                    if ($receiverUser) {
+                        $title = "🗑️ Transfer Deleted: Rs. " . number_format($transfer->amount, 2);
+                        $message = "👤 From: " . $sender->full_name . " (Reversed)\n" .
+                                   "--------------------------------\n" .
+                                   "💰 My Balance: Rs. " . number_format($receiverBalance, 2) . "\n" .
+                                   "💰 Sender Balance: Rs. " . number_format($senderBalance, 2);
+
+                        \App\Models\Notification::create([
+                            'user_id' => $receiverUser->id,
+                            'title' => $title,
+                            'message' => $message,
+                            'type' => 'transfer',
+                            'reference_type' => CashTransfer::class,
+                            'reference_id' => $id, // Use ID even if deleted
+                        ]);
+                        
+                        $receiverUser->notify(new FinanceUpdated($title, $message, ['type' => 'cash_transfer_deleted']));
+                    }
+
+                    // Notify Sender (Funds Returned/Added)
+                    $senderUser = $sender->user;
+                    if ($senderUser) {
+                        $title = "🗑️ Transfer Deleted: Rs. " . number_format($transfer->amount, 2);
+                        $message = "👤 To: " . $receiver->full_name . " (Reversed)\n" .
+                                   "--------------------------------\n" .
+                                   "💰 My Balance: Rs. " . number_format($senderBalance, 2) . "\n" .
+                                   "💰 Receiver Balance: Rs. " . number_format($receiverBalance, 2);
+
+                        \App\Models\Notification::create([
+                            'user_id' => $senderUser->id,
+                            'title' => $title,
+                            'message' => $message,
+                            'type' => 'transfer',
+                            'reference_type' => CashTransfer::class,
+                            'reference_id' => $id,
+                        ]);
+
+                        $senderUser->notify(new FinanceUpdated($title, $message, ['type' => 'cash_transfer_deleted']));
+                    }
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Delete Notification failed: ' . $e->getMessage());
+            }
 
             return response()->json([
                 'success' => true,
