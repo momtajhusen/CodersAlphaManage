@@ -11,7 +11,7 @@
       "resizeMode": "contain"
     },
     "ios": {
-      "supportsTabletMode": true,
+      "supportsTablet": true,
       "bundleIdentifier": "com.codersalphamanager.app"
     },
     "android": {
@@ -20,8 +20,7 @@
         "backgroundColor": "#1A2332"
       },
       "package": "com.codersalphamanager.app",
-      "googleServicesFile": "./google-services.json",
-      "usesCleartextTraffic": true
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/icon.png"
@@ -32,6 +31,9 @@
         {
           "ios": {
             "useFrameworks": "static"
+          },
+          "android": {
+            "usesCleartextTraffic": true
           }
         }
       ]
