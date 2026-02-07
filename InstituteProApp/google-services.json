@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "896342306985",
+    "project_id": "codersalphamanagerapp-ba507",
+    "storage_bucket": "codersalphamanagerapp-ba507.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:896342306985:android:62b924126bc2e54a90b9b8",
+        "android_client_info": {
+          "package_name": "com.codersalphamanager.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCaIPROyaNmG4Ha_ysS-MDTA73PIYZnVdM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

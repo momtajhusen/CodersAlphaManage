@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "CodersAlpha Manager",
+    "slug": "institute-management-app",
+    "version": "1.0.0",
+    "userInterfaceStyle": "dark",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTabletMode": true,
+      "bundleIdentifier": "com.codersalphamanager.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#1A2332"
+      },
+      "package": "com.codersalphamanager.app",
+      "googleServicesFile": "./google-services.json",
+      "usesCleartextTraffic": true
+    },
+    "web": {
+      "favicon": "./assets/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ]
+    ],
+    "scheme": "institutepro",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "extra": {
+      "apiUrl": "http://your-api-url.com/api",
+      "eas": {
+        "projectId": "59ca5595-862c-4a48-99a3-ff00a4699078"
+      }
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "owner": "mumtaz666raza-2"
+  }
+}
