@@ -6,12 +6,12 @@ import AuthNavigator from './AuthNavigator';
 import MainNavigator from './MainNavigator';
 import { useTheme } from '../themes/ThemeContext';
 import { useAuth } from '../hooks/useAuth';
-import AnimatedSplashScreen from '../screens/SplashScreen';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
 import BiometricLockScreen from '../screens/BiometricLockScreen';
 import NotificationsScreen from '../screens/notifications/NotificationsScreen';
 import * as Notifications from 'expo-notifications';
+import * as SplashScreen from 'expo-splash-screen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -20,7 +20,6 @@ export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 export default function RootNavigator() {
   const { theme, scheme } = useTheme();
   const { user, isInitializing } = useAuth();
-  const [isSplashAnimationFinished, setIsSplashAnimationFinished] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [isBiometricChecked, setIsBiometricChecked] = useState(false);
 
@@ -151,13 +150,16 @@ export default function RootNavigator() {
     },
   };
 
-  // While initializing or animating or checking biometric, show the custom splash screen
-  if (isInitializing || !isSplashAnimationFinished || !isBiometricChecked) {
-    return (
-      <AnimatedSplashScreen 
-        onAnimationFinish={() => setIsSplashAnimationFinished(true)} 
-      />
-    );
+  // While initializing or checking biometric, keep showing native splash (handled by App.tsx preventAutoHideAsync)
+  // We just return null here, and once ready, we hide the splash screen
+  useEffect(() => {
+    if (!isInitializing && isBiometricChecked) {
+      SplashScreen.hideAsync();
+    }
+  }, [isInitializing, isBiometricChecked]);
+
+  if (isInitializing || !isBiometricChecked) {
+    return null;
   }
 
   if (user && isLocked) {

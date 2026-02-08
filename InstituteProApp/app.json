@@ -8,19 +8,21 @@
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash.png",
-      "resizeMode": "contain"
+      "resizeMode": "contain",
+      "backgroundColor": "#1A2332"
     },
     "ios": {
-      "supportsTablet": true,
+      "supportsTabletMode": true,
       "bundleIdentifier": "com.codersalphamanager.app"
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1A2332"
       },
       "package": "com.codersalphamanager.app",
-      "googleServicesFile": "./google-services.json"
+      "googleServicesFile": "./google-services.json",
+      "usesCleartextTraffic": true
     },
     "web": {
       "favicon": "./assets/icon.png"
@@ -31,9 +33,6 @@
         {
           "ios": {
             "useFrameworks": "static"
-          },
-          "android": {
-            "usesCleartextTraffic": true
           }
         }
       ]

@@ -259,7 +259,25 @@ export default function ExpensesScreen() {
 
       return (
         <AnimatedEntry delay={index % 10 * 50} from="bottom">
-            <View style={styles.card}>
+            <ScalePressable 
+                onPress={() => {
+                    if (item.type === 'expense') {
+                        navigation.navigate('ExpenseDetail', { id: String(item.id) });
+                    } else if (item.type === 'income') {
+                        navigation.navigate('IncomeDetail', { id: String(item.id) });
+                    } else if (item.type === 'transfer') {
+                        // For future: add TransferDetail screen if needed
+                        // Currently transfer history is the main view for transfers
+                        Toast.show({
+                            type: 'info',
+                            text1: 'Transfer Details',
+                            text2: 'Transfer details view coming soon',
+                            position: 'bottom'
+                        });
+                    }
+                }}
+                style={styles.card}
+            >
                 <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                     <View style={[styles.iconBox, { backgroundColor: bgColor }]}>
                         <Feather name={iconName} size={rf(2.2)} color={iconColor} />
@@ -289,7 +307,7 @@ export default function ExpensesScreen() {
                         {item.status || 'completed'}
                     </Text>
                 </View>
-            </View>
+            </ScalePressable>
         </AnimatedEntry>
       );
   };
